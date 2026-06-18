@@ -32,6 +32,8 @@ def pre_processing_chat(conversations, add_system_ratio=0.2):
         "You are minimind, a small but useful language model."
     ]
     # 概率性添加system
+    # 这样做相当于轻量数据增强：同一类问答有时带 system prompt，有时不带，
+    # 让模型更适应真实聊天场景中不同的对话开头。
     if conversations[0].get('role') != 'system':
         if random.random() < add_system_ratio:
             return [{'role': 'system', 'content': random.choice(SYSTEM_PROMPTS)}] + conversations
@@ -39,6 +41,7 @@ def pre_processing_chat(conversations, add_system_ratio=0.2):
 
 def post_processing_chat(prompt_content, empty_think_ratio=0.2):
     # 以80%概率移除空思考标签
+    # 有些数据会带空的 <think></think>，大多数时候删掉，少量保留用于兼容带思考格式的数据。
     if '<think>\n\n</think>\n\n' in prompt_content and random.random() > empty_think_ratio:
         prompt_content = prompt_content.replace('<think>\n\n</think>\n\n', '')
     return prompt_content
@@ -47,11 +50,17 @@ def post_processing_chat(prompt_content, empty_think_ratio=0.2):
 class VLMDataset(Dataset):
     def __init__(self, parquet_path, tokenizer, preprocess=None, max_length=512, image_special_token='<|image_pad|>', image_token_len=64):
         super().__init__()
+        # Parquet 中每行包含 conversations 和 image_bytes。
+        # 这里一次读成 Arrow Table，优点是随机索引快；缺点是大数据集会占用较多内存。
         self.table = pa.Table.from_batches(pq.ParquetFile(parquet_path).iter_batches())
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.preprocess = preprocess
+        # 一个 <image> 会被展开成 64 个 <|image_pad|>。
+        # 后续 model_vlm.count_vision_proj 会用 64 个视觉 token 替换这些 token 的 embedding。
         self.image_special_token = image_special_token * image_token_len
+        # bos_id/eos_id 用来定位 assistant 回复段落。
+        # 只有 assistant 说的话会作为 label 参与 loss，user/system prompt 不参与监督。
         self.bos_id = tokenizer(f'{tokenizer.bos_token}assistant\n', add_special_tokens=False).input_ids
         self.eos_id = tokenizer(f'{tokenizer.eos_token}\n', add_special_tokens=False).input_ids
 
@@ -61,9 +70,12 @@ class VLMDataset(Dataset):
     def create_chat_prompt(self, conversations):
         messages = []
         for turn in conversations:
+            # 数据里通常用 <image> 表示图像位置；模型实际需要 64 个 image pad token 占位。
             content = turn['content'].replace('<image>', self.image_special_token) if turn.get('role') != 'system' else turn['content']
             messages.append({"role": turn['role'], "content": content})
         tools = conversations[0]["functions"] if (conversations and conversations[0]["role"] == "system" and conversations[0].get("functions")) else None
+        # tokenizer 的 chat_template 会把 role/content 转成模型训练时看到的完整文本格式。
+        # 这一步非常关键：训练和推理必须使用同一种模板，否则模型会学到/看到不同分布。
         return self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -75,6 +87,8 @@ class VLMDataset(Dataset):
         labels = [-100] * len(input_ids)
         i = 0
         while i < len(input_ids):
+            # 找到 assistant 回复开始标记：<bos>assistant\n。
+            # 从它后面开始，到 eos 结束，才是模型需要学习预测的答案。
             if input_ids[i:i + len(self.bos_id)] == self.bos_id:
                 start = i + len(self.bos_id)
                 end = start
@@ -82,6 +96,8 @@ class VLMDataset(Dataset):
                     if input_ids[end:end + len(self.eos_id)] == self.eos_id:
                         break
                     end += 1
+                # label 与 input_ids 等长；Causal LM 内部会 shift，所以这里把答案 token 原样放入 labels。
+                # -100 的位置会被 cross_entropy 忽略，避免模型被训练去复述用户问题。
                 for j in range(start, min(end + len(self.eos_id), self.max_length)):
                     labels[j] = input_ids[j]
                 i = end + len(self.eos_id) if end < len(input_ids) else len(input_ids)
@@ -92,17 +108,22 @@ class VLMDataset(Dataset):
     def __getitem__(self, index: int):
         conversations = json.loads(self.table['conversations'][index].as_py())
         image_bytes = self.table['image_bytes'][index].as_py()
+        # 支持单图和多图样本：单图是 bytes，多图可能是 bytes list。
         if not isinstance(image_bytes, list): image_bytes = [image_bytes]
         
         conversations = pre_processing_chat(conversations)
         prompt = self.create_chat_prompt(conversations)
         prompt = post_processing_chat(prompt)
+        # 截断到 max_length 后再 pad 到固定长度，方便 DataLoader 直接 stack 成 batch。
         input_ids = self.tokenizer(prompt).input_ids[:self.max_length]
         input_ids += [self.tokenizer.pad_token_id] * (self.max_length - len(input_ids))
         labels = self.generate_labels(input_ids)
 
+        # image_bytes 是 parquet 中保存的 JPEG/PNG 二进制；这里恢复为 PIL Image 后交给 SigLIP processor。
         image_inputs_list = [MiniMindVLM.image2tensor(Image.open(io.BytesIO(img)), self.preprocess) for img in image_bytes]
         if hasattr(image_inputs_list[0], 'keys'):
+            # HuggingFace processor 通常返回字典，例如 {'pixel_values': tensor(...)}。
+            # 多张图时按 key 拼起来，保持后续 collate 能继续按字典处理。
             image_data = {k: torch.cat([inp[k] for inp in image_inputs_list], dim=0) for k in image_inputs_list[0].keys()}
         else:
             image_data = torch.stack(image_inputs_list)

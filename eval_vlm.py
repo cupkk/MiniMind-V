@@ -11,6 +11,8 @@ from trainer.trainer_utils import setup_seed, get_model_params
 warnings.filterwarnings('ignore')
 
 def init_model(args):
+    # args.load_from='model' 表示使用本仓库原生 PyTorch 权重；
+    # 其他路径表示加载已经 convert 成 HuggingFace Transformers 格式的模型目录。
     tokenizer = AutoTokenizer.from_pretrained(args.load_from, trust_remote_code=True)
     if 'model' in args.load_from:
         moe_suffix = '_moe' if args.use_moe else ''
@@ -20,6 +22,8 @@ def init_model(args):
             vision_model_path="./model/siglip2-base-p32-256-ve"
         )
         state_dict = torch.load(ckp, map_location=args.device)
+        # 这里 strict=False 是为了兼容权重里缺少 vision_encoder 或多余字段的情况。
+        # vision_encoder 通常不保存在 VLM 权重里，而是从 ./model/siglip2-base-p32-256-ve 单独加载。
         model.load_state_dict({k: v for k, v in state_dict.items() if 'mask' not in k}, strict=False)
     else:
         model = AutoModelForCausalLM.from_pretrained(args.load_from, trust_remote_code=True)
@@ -55,8 +59,12 @@ def main():
             setup_seed(random.randint(1, 31415926))
             image_path = os.path.join(args.image_dir, image_file)
             image = Image.open(image_path).convert('RGB')
+            # processor 输出会被传入 model.generate(pixel_values=...)。
+            # MiniMindVLM.forward 首步会把 pixel_values 编码成 64 个视觉 token 并替换 image pad embedding。
             pixel_values = {k: v.to(args.device) for k, v in MiniMindVLM.image2tensor(image, preprocess).items()}
             
+            # 训练时 <image> 被展开成 64 个 <|image_pad|>，推理时也必须保持一致。
+            # 如果这里仍然传原始 <image>，模型就找不到要替换的占位 token。
             messages = [{"role": "user", "content": prompt.replace('<image>', model.config.image_special_token * model.config.image_token_len)}]
             inputs_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True, open_thinking=bool(args.open_thinking))
             inputs = tokenizer(inputs_text, return_tensors="pt", truncation=True).to(args.device)
@@ -69,6 +77,8 @@ def main():
                 inputs=inputs["input_ids"], attention_mask=inputs["attention_mask"],
                 max_new_tokens=args.max_new_tokens, do_sample=True, streamer=streamer,
                 pad_token_id=tokenizer.pad_token_id, eos_token_id=tokenizer.eos_token_id,
+                # top_p 和 temperature 控制生成随机性：面试中可解释为采样解码策略，
+                # 不是模型结构的一部分，只影响输出多样性。
                 top_p=args.top_p, temperature=args.temperature, pixel_values=pixel_values
             )
             gen_tokens = len(generated_ids[0]) - len(inputs["input_ids"][0])

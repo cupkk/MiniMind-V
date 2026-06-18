@@ -26,22 +26,26 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
     start_time = time.time()
     last_step = start_step
     for step, (input_ids, labels, pixel_values) in enumerate(loader, start=start_step + 1):
+        # SFT batch 同时包含图文指令、caption 和少量纯文本对话；labels 只监督 assistant 回复。
         input_ids = input_ids.to(args.device)
         labels = labels.to(args.device)
         pixel_values = {k: v.to(args.device) for k, v in pixel_values.items()} if isinstance(pixel_values, dict) else pixel_values.to(args.device)
         last_step = step
+        # SFT 默认学习率比 Pretrain 小得多，因为会微调 LLM 首尾层，步子太大会破坏语言能力。
         lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         with autocast_ctx:
             res = model(input_ids, labels=labels, pixel_values=pixel_values)
+            # res.loss 是语言建模 loss；res.aux_loss 主要服务于 MoE 版本的路由均衡。
             loss = res.loss + res.aux_loss
             loss = loss / args.accumulation_steps
 
         scaler.scale(loss).backward()
 
         if step % args.accumulation_steps == 0:
+            # unscale 后再做梯度裁剪，才能在混合精度训练中得到正确的梯度范数。
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
@@ -67,6 +71,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
             raw_model = model.module if isinstance(model, DistributedDataParallel) else model
             raw_model = getattr(raw_model, '_orig_mod', raw_model)
             state_dict = raw_model.state_dict()
+            # 保存给 eval_vlm.py 使用的轻量权重：不包含冻结的 vision_encoder。
             clean_state_dict = {
                 key: value for key, value in state_dict.items() if not key.startswith('vision_encoder.')
             }
@@ -80,6 +85,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         del input_ids, labels, pixel_values, res, loss
 
     if last_step > start_step and last_step % args.accumulation_steps != 0:
+        # 处理 epoch 末尾不足一个 accumulation window 的残余梯度。
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         scaler.step(optimizer)
@@ -139,6 +145,8 @@ if __name__ == "__main__":
         wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
     
     # ========== 5. 定义模型、数据、优化器 ==========
+    # SFT 默认 freeze_llm=1：训练 projector + LLM 首尾层。
+    # 这是小模型的折中策略，既增强图文融合，又尽量保留中间层语言能力。
     model, tokenizer, preprocess = init_vlm_model(vlm_config, from_weight=args.from_weight, device=args.device, freeze_llm=args.freeze_llm)
     train_ds = VLMDataset(args.data_path, tokenizer, preprocess=preprocess, image_special_token=vlm_config.image_special_token, image_token_len=vlm_config.image_token_len, max_length=vlm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None

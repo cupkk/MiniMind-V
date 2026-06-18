@@ -26,22 +26,26 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
     start_time = time.time()
     last_step = start_step
     for step, (input_ids, labels, pixel_values) in enumerate(loader, start=start_step + 1):
+        # 一个 batch 包含：文本 token、只监督 assistant 的 labels、图像 processor 输出。
         input_ids = input_ids.to(args.device)
         labels = labels.to(args.device)
         pixel_values = {k: v.to(args.device) for k, v in pixel_values.items()} if isinstance(pixel_values, dict) else pixel_values.to(args.device)
         last_step = step
+        # 每个 step 动态更新学习率。Pretrain 默认学习率较高，因为主要训练随机初始化的 projector。
         lr = get_lr(epoch * iters + step, args.epochs * iters, args.learning_rate)
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
         with autocast_ctx:
             res = model(input_ids, labels=labels, pixel_values=pixel_values)
+            # dense 模型 aux_loss 为 0；MoE 模型会额外加入 router auxiliary loss，鼓励 expert 负载均衡。
             loss = res.loss + res.aux_loss
             loss = loss / args.accumulation_steps
 
         scaler.scale(loss).backward()
 
         if step % args.accumulation_steps == 0:
+            # 梯度累积到指定步数后再真正更新一次参数，等效于放大 batch size。
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
 
@@ -67,6 +71,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
             raw_model = model.module if isinstance(model, DistributedDataParallel) else model
             raw_model = getattr(raw_model, '_orig_mod', raw_model)
             state_dict = raw_model.state_dict()
+            # 发布/推理权重不保存 vision_encoder，避免重复存一份固定的 SigLIP2。
             clean_state_dict = {
                 key: value for key, value in state_dict.items() if not key.startswith('vision_encoder.')
             }
@@ -80,6 +85,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         del input_ids, labels, pixel_values, res, loss
 
     if last_step > start_step and last_step % args.accumulation_steps != 0:
+        # 如果 epoch 结束时还有没凑满 accumulation_steps 的梯度，也执行一次更新，避免最后几个 batch 白跑。
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
         scaler.step(optimizer)
@@ -139,6 +145,7 @@ if __name__ == "__main__":
         wandb.init(project=args.wandb_project, name=wandb_run_name, id=wandb_id, resume=resume)
     
     # ========== 5. 定义模型、数据、优化器 ==========
+    # Pretrain 默认 freeze_llm=2：只训练 vision_proj，让图像 token 先学会落到 LLM 语言空间附近。
     model, tokenizer, preprocess = init_vlm_model(vlm_config, from_weight=args.from_weight, device=args.device, freeze_llm=args.freeze_llm)
     train_ds = VLMDataset(args.data_path, tokenizer, preprocess=preprocess, image_special_token=vlm_config.image_special_token, image_token_len=vlm_config.image_token_len, max_length=vlm_config.max_seq_len)
     train_sampler = DistributedSampler(train_ds) if dist.is_initialized() else None
