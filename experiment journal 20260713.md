@@ -126,3 +126,12 @@
 - 文档完整性：五份目标文档全部存在；代码围栏数量均为偶数；共包含 10 个 Mermaid 图块。
 - Git 检查：`git diff --check` 通过；待提交范围仅为五份学习文档、当日日志和 `.gitignore`。
 - 保留：`model/siglip2-base-p32-256-ve/`、`out/` 继续忽略，两篇论文 PDF 已在上一阶段提交，不重复修改。
+
+### Git 发布
+
+- 目标远端：用户个人仓库 `https://github.com/cupkk/MiniMind-V.git`。
+- 目标分支：`main`。
+- 文档提交：`453c8b8 docs: add first-principles MiniMind-V study guide`。
+- 推送结果：`4de1e47..453c8b8 main -> main`。
+- 远端核验：第一次推送后，`git rev-parse HEAD` 与 `git ls-remote --heads origin main` 均为 `453c8b8ad83394fa16ecbda5550ddadac76be411`。
+- 下一步：完成本条发布日志的收尾提交后，再次核验最终本地/远端哈希一致和工作区干净。
