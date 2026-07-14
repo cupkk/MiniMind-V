@@ -67,3 +67,11 @@
 - 专业术语检查通过：Tensor、Token、Embedding、Linear、Softmax、Cross Entropy、Vision Transformer、Projector、Self-Attention、Causal Mask、GQA、RoPE、KV Cache、Prefill、Decode、LoRA、Quantization 和 Speculative Decoding 均在正文给出中文解释。
 - 公式块 20 组，Markdown 代码围栏成对闭合，未发现 TODO/TBD 类未完成内容。
 - 保留诚实边界：导师问题为基于公开方向的预测；不声称完整训练、标准 benchmark 或自行发明架构。
+
+### Git 发布
+
+- 讲义提交：`7a079d1 docs: add beginner-friendly MiniMind-V interview guide`。
+- 推送目标：个人仓库 `https://github.com/cupkk/MiniMind-V.git` 的 `main` 分支。
+- 推送结果：`93282ba..7a079d1 main -> main`。
+- 首轮远端核验：本地和 `origin/main` 均为 `7a079d166cfeeea66f3013887d92f26b38553f1d`，工作区干净。
+- 下一步：提交本条发布日志并再次核验最终远端状态，然后开始逐题模拟面试。
