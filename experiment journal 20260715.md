@@ -75,3 +75,16 @@
 - 推送结果：`93282ba..7a079d1 main -> main`。
 - 首轮远端核验：本地和 `origin/main` 均为 `7a079d166cfeeea66f3013887d92f26b38553f1d`，工作区干净。
 - 下一步：提交本条发布日志并再次核验最终远端状态，然后开始逐题模拟面试。
+
+### GPT Image 2 教学配图
+
+- 调用方式：本地 `imagegen` 技能的 `scripts/image_gen.py` CLI，模型显式指定 `gpt-image-2`。
+- 输出目录：`output/imagegen/`。
+- 生成 `minimind-v-overall-pipeline.png`：整体图片问答链路，包含 8×8 patch、64×768 视觉 token、四步 Projector、8 层 LLM、问题和回答。
+- 生成 `minimind-v-projector-alignment.png`：用视觉空间与语言空间的同维不同义对比解释 Projector，准确展示 LayerNorm、Linear、GELU、Linear。
+- 生成 `minimind-v-two-stage-training.png`：展示阶段一 Projector-only 和阶段二 Projector + 首尾 Transformer block 的冻结策略。
+- 视觉检查：三张图的主体、箭头、标签和技术关系均人工查看；整体图首次版本漏掉 Projector 的 LayerNorm 和第二个 Linear，使用 GPT Image 2 edit 修正后替换旧版。
+- 失败记录：推理效率图分别用 1536×1024/high 和 1024×1024/medium 尝试三次，均在服务端生成阶段断开并返回 `openai.APIConnectionError`；未产生残缺文件。讲义已有对应 Mermaid 图，因此停止重试。
+- 文档更新：三张通过检查的图片已嵌入统一讲义对应章节，并配中文图注解释图中含义和源码编号差异。
+- 复现记录：新增 `output/imagegen/README.md`，保存 `gpt-image-2` 模型、质量、尺寸和最终提示词。
+- 文件验证：三张最终图片均为 1536×1024 RGB PNG，像素范围完整，文档引用路径全部存在；失败的推理效率图文件不存在。

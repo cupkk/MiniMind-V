@@ -20,6 +20,10 @@ flowchart LR
     E["用户问题"] --> D
 ```
 
+![MiniMind-V 从图片到回答的整体流程](output/imagegen/minimind-v-overall-pipeline.png)
+
+上图把完整链路压缩成一条视觉故事：图片先被切成 64 个 patch，编码为 64×768 的视觉 token，再经过四步 Projector 和 8 层 MiniMind LLM；问题 token 从下方进入同一个 LLM，最终生成回答。
+
 SigLIP2 是 Vision Encoder，中文叫“视觉编码器”，作用类似眼睛；Projector 中文叫“投影器”或“连接器”，作用类似翻译器；MiniMind LLM 是 Large Language Model，中文叫“大语言模型”，作用类似负责理解上下文和组织回答的大脑。这个比喻并不严格，但非常适合建立第一层理解。
 
 面试时可以先这样概括：
@@ -167,6 +171,10 @@ $$
 Projector 约有 1.183M 可训练参数。计算如下：两层 `768×768` Linear 各包含 `768×768+768=590,592` 个参数，再加 LayerNorm 的缩放和偏置 `2×768=1,536`，总计 1,182,720。
 
 这个数字体现了项目的轻量化思想：不从头训练一个庞大多模态模型，而是保留已有的眼睛和语言大脑，只训练一个较小的翻译器。
+
+![相同 768 维不代表相同语义空间](output/imagegen/minimind-v-projector-alignment.png)
+
+图中的左右两边都有 768 个维度，但左边由毛发、草地、天空等视觉统计形成，右边由 DOG、GRASS、SKY 等语言关系形成。Projector 学习的是坐标含义的转换，而不只是修改向量长度。
 
 ### 4.2 图像和文字究竟在哪里融合
 
@@ -354,6 +362,10 @@ flowchart LR
     B --> D["阶段二：图文 SFT<br/>训练 Projector + LLM 第 0/最后层"]
     D --> E["能按指令看图回答的 VLM"]
 ```
+
+![MiniMind-V 两阶段训练与冻结策略](output/imagegen/minimind-v-two-stage-training.png)
+
+左图表示阶段一只训练 Projector，视觉编码器和全部 8 个 LLM block 冻结；右图表示阶段二继续训练 Projector，并开放第 1 和第 8 个 block，中间第 2 至第 7 个 block 仍冻结。代码按从 0 开始编号，因此源码中的第 0 层就是图中的 BLOCK 1。
 
 第一阶段常称 Pretrain，但这里不是从零预训练整个模型，而是 projector-only alignment，即“只训练连接器的视觉语言对齐”。输入通常是图片描述数据。损失仍然是文本生成损失，并没有单独计算“视觉向量与文本向量的距离”。Projector 通过回答是否正确间接学会映射。
 
