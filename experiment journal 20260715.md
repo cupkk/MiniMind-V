@@ -88,3 +88,5 @@
 - 文档更新：三张通过检查的图片已嵌入统一讲义对应章节，并配中文图注解释图中含义和源码编号差异。
 - 复现记录：新增 `output/imagegen/README.md`，保存 `gpt-image-2` 模型、质量、尺寸和最终提示词。
 - 文件验证：三张最终图片均为 1536×1024 RGB PNG，像素范围完整，文档引用路径全部存在；失败的推理效率图文件不存在。
+- 配图提交：`d7733b8 docs: add GPT Image 2 learning visuals`。
+- 推送结果：`540dc6b..d7733b8 main -> main`；首轮核验本地与远端均为 `d7733b8bcdc4d835ca806729a5ca1ef70db8ba36`。
